@@ -1,2 +1,0 @@
-# MCP Server - no external dependencies
-# Uses Python standard library only (sqlite3, json, sys)
