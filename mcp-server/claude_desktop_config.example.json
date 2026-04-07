@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "context-capture": {
+      "command": "python",
+      "args": ["C:\\Users\\sidmi\\OneDrive\\Documents\\GeodoDemo\\mcp-server\\mcp_server.py"]
+    }
+  }
+}

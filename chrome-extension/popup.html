@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      width: 360px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a73e8;
+      margin: 0;
+    }
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-badge.idle {
+      background: #e8eaed;
+      color: #5f6368;
+    }
+    .status-badge.recording {
+      background: #fce8e8;
+      color: #d93025;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    /* Main Button */
+    .record-button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .record-button.start {
+      background: #1a73e8;
+      color: white;
+    }
+    .record-button.start:hover {
+      background: #1557b0;
+    }
+    .record-button.stop {
+      background: #d93025;
+      color: white;
+    }
+    .record-button.stop:hover {
+      background: #b31412;
+    }
+    .record-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .record-icon {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: white;
+    }
+    .record-button.stop .record-icon {
+      border-radius: 2px;
+    }
+
+    /* Stats */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 16px 0;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    .stat {
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: #202124;
+    }
+    .stat-label {
+      font-size: 10px;
+      color: #5f6368;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+
+    /* Ask Claude Section */
+    .ask-section {
+      margin: 16px 0;
+      padding-top: 16px;
+      border-top: 1px solid #e8eaed;
+    }
+    .section-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #5f6368;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .ask-textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      font-size: 13px;
+      resize: vertical;
+      min-height: 60px;
+      font-family: inherit;
+    }
+    .ask-textarea:focus {
+      outline: none;
+      border-color: #1a73e8;
+    }
+    .ask-button {
+      width: 100%;
+      margin-top: 8px;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      background: #f1f3f4;
+      color: #5f6368;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .ask-button:hover:not(:disabled) {
+      background: #e8eaed;
+    }
+    .ask-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    .ask-button.loading {
+      background: #e8f0fe;
+      color: #1967d2;
+    }
+
+    /* Response */
+    .response {
+      margin-top: 12px;
+      padding: 12px;
+      background: #e8f0fe;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #202124;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .response:empty {
+      display: none;
+    }
+    .response.error {
+      background: #fce8e8;
+      color: #d93025;
+    }
+
+    /* Recent Captures */
+    .captures-section {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #e8eaed;
+    }
+    .capture-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .capture-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 6px;
+    }
+    .capture-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      background: #e8eaed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .capture-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .capture-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: #202124;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .capture-meta {
+      font-size: 11px;
+      color: #5f6368;
+      margin-top: 2px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #80868b;
+      font-size: 13px;
+    }
+
+    /* Notification */
+    .toast {
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      padding: 10px 16px;
+      background: #202124;
+      color: white;
+      font-size: 12px;
+      border-radius: 6px;
+      opacity: 0;
+      transition: all 0.3s;
+      pointer-events: none;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+    .toast.error {
+      background: #d93025;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1 class="title">Context Capture</h1>
+    <span id="statusBadge" class="status-badge idle">Idle</span>
+  </div>
+
+  <button id="recordBtn" class="record-button start">
+    <span class="record-icon"></span>
+    Start Recording
+  </button>
+
+  <div class="stats">
+    <div class="stat">
+      <div id="capturedCount" class="stat-value">0</div>
+      <div class="stat-label">Captured</div>
+    </div>
+    <div class="stat">
+      <div id="sessionDuration" class="stat-value">0:00</div>
+      <div class="stat-label">Duration</div>
+    </div>
+    <div class="stat">
+      <div id="domainCount" class="stat-value">0</div>
+      <div class="stat-label">Domains</div>
+    </div>
+  </div>
+
+  <div class="ask-section">
+    <div class="section-label">Ask Claude</div>
+    <textarea id="askInput" class="ask-textarea" placeholder="e.g., What did I read about MCP today?"></textarea>
+    <button id="askBtn" class="ask-button">Ask Claude</button>
+    <div id="response" class="response"></div>
+  </div>
+
+  <div class="captures-section">
+    <div class="section-label">Recent Captures</div>
+    <div id="captureList" class="capture-list">
+      <div class="empty-state">No captures yet</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

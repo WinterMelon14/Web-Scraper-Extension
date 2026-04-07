@@ -1,0 +1,11 @@
+{
+  "name": "context-capture-mcp",
+  "version": "1.0.0",
+  "description": "MCP Server for Context Capture - exposes SQLite database via Model Context Protocol (Python)",
+  "main": "mcp_server.py",
+  "scripts": {
+    "start": "python mcp_server.py"
+  },
+  "keywords": ["mcp", "claude", "context", "capture", "python"],
+  "license": "MIT"
+}
