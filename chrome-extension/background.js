@@ -1,6 +1,6 @@
 // Background service worker - generic capture system
 
-const API_URL = 'http://localhost:3000';
+const API_URL = 'http://127.0.0.1:3000';
 
 // State keys
 const SESSION_STATE = 'session_state';
@@ -265,10 +265,14 @@ async function addCaptureToStorage(capture) {
   domains.add(domain);
   stats.domains = Array.from(domains);
 
+  console.log('Updated stats:', stats);
+
   await chrome.storage.local.set({
     [CAPTURED_PAGES]: pages,
     [SESSION_STATS]: stats,
   });
+
+  console.log('Storage updated successfully');
 }
 
 async function handleCapture(data, tab) {

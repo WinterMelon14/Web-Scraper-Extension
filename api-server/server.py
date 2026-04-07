@@ -340,10 +340,9 @@ Answer based on the captured content above. Be concise."""
         response = gemini_model.generate_content(
             full_prompt,
             generation_config={
-                "temperature": 0.7,
-                "max_output_tokens": 1024,
-            }
+                "temperature": 0.7            }
         )
+        print(response.text)
         return response.text
     except Exception as e:
         print(e)

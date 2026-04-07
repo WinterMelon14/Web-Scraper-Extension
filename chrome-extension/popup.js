@@ -1,18 +1,62 @@
-// Popup script - generic version
+// Popup script
 
-const API_URL = 'http://localhost:3000';
+const API_URL = 'http://127.0.0.1:3000';
 
 const SESSION_STATE = 'session_state';
 const SESSION_START = 'session_start';
 const CAPTURED_PAGES = 'captured_pages';
 const SESSION_STATS = 'session_stats';
+const CONVERSATION_HISTORY = 'conversation_history';
 
 let sessionInterval = null;
+
+// Simple markdown parser
+function parseMarkdown(text) {
+  if (!text) return '';
+
+  let html = escapeHtml(text);
+
+  // Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+
+  // Italic: *text* or _text_
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
+
+  // Bullet lists: - item or * item
+  html = html.replace(/^[*\-]\s+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // Numbered lists: 1. item
+  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+
+  // Line breaks to paragraphs
+  html = html.split('\n\n').map(para => {
+    if (para.trim() && !para.startsWith('<')) {
+      return `<p>${para}</p>`;
+    }
+    return para;
+  }).join('');
+
+  // Single line breaks
+  html = html.replace(/\n/g, '<br>');
+
+  return html;
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
 
 async function init() {
   await updateUI();
   await updateStats();
   await loadRecentCaptures();
+  await loadConversationHistory();
 
   const state = await getState();
   if (state === 'recording') {
@@ -20,14 +64,23 @@ async function init() {
   }
 
   document.getElementById('recordBtn').addEventListener('click', toggleRecording);
-  document.getElementById('askBtn').addEventListener('click', askClaude);
+  document.getElementById('askBtn').addEventListener('click', askQuestion);
+  document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
 
   document.getElementById('askInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      askClaude();
+      askQuestion();
     }
   });
+
+  // Poll for stats updates every 2 seconds while recording
+  setInterval(async () => {
+    const currentState = await getState();
+    if (currentState === 'recording') {
+      updateStats();
+    }
+  }, 2000);
 }
 
 async function getState() {
@@ -45,7 +98,6 @@ async function toggleRecording() {
 }
 
 async function startRecording() {
-  // Clear any previous session state first
   stopDurationTimer();
 
   await chrome.storage.local.set({
@@ -63,16 +115,14 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  // Clear all session state
+  // Stop recording but preserve stats
   await chrome.storage.local.set({
     [SESSION_STATE]: 'idle',
     [SESSION_START]: null,
-    [SESSION_STATS]: { captured: 0, domains: [] },
   });
   chrome.runtime.sendMessage({ action: 'stopRecording' });
   stopDurationTimer();
   updateUI();
-  updateStats();
   showToast('Recording stopped');
 }
 
@@ -98,9 +148,10 @@ async function updateStats() {
   const result = await chrome.storage.local.get([SESSION_STATS, SESSION_START]);
   const stats = result[SESSION_STATS] || { captured: 0, domains: [] };
 
+  console.log('Updating stats:', stats);
+
   document.getElementById('capturedCount').textContent = stats.captured || 0;
-  document.getElementById('domainCount').textContent =
-    (stats.domains || []).length;
+  document.getElementById('domainCount').textContent = (stats.domains || []).length;
 
   if (result[SESSION_START]) {
     updateDurationDisplay(result[SESSION_START]);
@@ -111,8 +162,7 @@ function updateDurationDisplay(startTime) {
   const elapsed = Date.now() - startTime;
   const minutes = Math.floor(elapsed / 60000);
   const seconds = Math.floor((elapsed % 60000) / 1000);
-  document.getElementById('sessionDuration').textContent =
-    `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  document.getElementById('sessionDuration').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
 function startDurationTimer() {
@@ -130,7 +180,6 @@ function stopDurationTimer() {
     clearInterval(sessionInterval);
     sessionInterval = null;
   }
-  // Reset the display
   document.getElementById('sessionDuration').textContent = '0:00';
   document.getElementById('capturedCount').textContent = '0';
   document.getElementById('domainCount').textContent = '0';
@@ -139,7 +188,6 @@ function stopDurationTimer() {
 async function loadRecentCaptures() {
   const result = await chrome.storage.local.get([CAPTURED_PAGES]);
   const pages = result[CAPTURED_PAGES] || [];
-
   const container = document.getElementById('captureList');
 
   if (pages.length === 0) {
@@ -168,21 +216,46 @@ async function loadRecentCaptures() {
   }).join('');
 }
 
-async function askClaude() {
+async function loadConversationHistory() {
+  const result = await chrome.storage.local.get([CONVERSATION_HISTORY]);
+  const history = result[CONVERSATION_HISTORY] || [];
+  const container = document.getElementById('responseContainer');
+
+  if (history.length === 0) {
+    container.innerHTML = '<div class="empty-state" id="emptyHistory">No conversation yet</div>';
+    return;
+  }
+
+  container.innerHTML = history.map((msg, idx) => `
+    <div class="message ${msg.role}">
+      <div class="message-header">
+        <span class="message-role">${msg.role === 'user' ? 'You' : 'Gemini'}</span>
+        <span class="message-time">${formatTimeAgo(msg.timestamp)}</span>
+      </div>
+      <div class="message-content">${parseMarkdown(msg.content)}</div>
+    </div>
+  `).join('');
+
+  // Scroll to bottom
+  container.scrollTop = container.scrollHeight;
+}
+
+async function askQuestion() {
   const input = document.getElementById('askInput');
   const btn = document.getElementById('askBtn');
-  const responseEl = document.getElementById('response');
-
   const question = input.value.trim();
+
   if (!question) return;
 
   btn.disabled = true;
   btn.classList.add('loading');
-  btn.textContent = 'Asking Claude...';
-  responseEl.textContent = '';
-  responseEl.className = 'response';
+  btn.textContent = 'Thinking...';
 
   try {
+    // Add user message immediately
+    await addMessageToHistory('user', question);
+    input.value = '';
+
     const res = await fetch(`${API_URL}/ask`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -192,15 +265,41 @@ async function askClaude() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     const data = await res.json();
-    responseEl.textContent = data.answer || 'No response';
+    await addMessageToHistory('assistant', data.answer || 'No response');
+
   } catch (err) {
-    responseEl.textContent = `Error: ${err.message}. Make sure the server is running.`;
-    responseEl.classList.add('error');
+    await addMessageToHistory('assistant', `Error: ${err.message}. Make sure the server is running.`, true);
   } finally {
     btn.disabled = false;
     btn.classList.remove('loading');
-    btn.textContent = 'Ask Claude';
+    btn.textContent = 'Ask';
   }
+}
+
+async function addMessageToHistory(role, content, isError = false) {
+  const result = await chrome.storage.local.get([CONVERSATION_HISTORY]);
+  const history = result[CONVERSATION_HISTORY] || [];
+
+  history.push({
+    role,
+    content,
+    timestamp: Date.now(),
+    isError
+  });
+
+  // Keep last 50 messages
+  if (history.length > 50) {
+    history.shift();
+  }
+
+  await chrome.storage.local.set({ [CONVERSATION_HISTORY]: history });
+  await loadConversationHistory();
+}
+
+async function clearHistory() {
+  await chrome.storage.local.set({ [CONVERSATION_HISTORY]: [] });
+  await loadConversationHistory();
+  showToast('History cleared');
 }
 
 function formatTimeAgo(timestamp) {
@@ -217,12 +316,6 @@ function truncate(str, len) {
   return str.length > len ? str.slice(0, len) + '...' : str;
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 function showToast(message, isError = false) {
   const toast = document.getElementById('toast');
   toast.textContent = message;
@@ -232,11 +325,17 @@ function showToast(message, isError = false) {
   }, 2500);
 }
 
-chrome.storage.onChanged.addListener((changes) => {
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  // Only listen to local storage changes
+  if (namespace !== 'local') return;
+
+  console.log('Storage changed:', changes);
+
   if (changes[CAPTURED_PAGES]) {
     loadRecentCaptures();
   }
   if (changes[SESSION_STATS]) {
+    console.log('Stats changed:', changes[SESSION_STATS].newValue);
     updateStats();
   }
 });
