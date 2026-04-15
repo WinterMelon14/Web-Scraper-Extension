@@ -84,6 +84,27 @@ def init_db():
             content='captures',
             content_rowid='id'
         );
+
+        -- Contacts table for CRM functionality
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            email TEXT,
+            phone TEXT,
+            linkedin_url TEXT,
+            company TEXT,
+            title TEXT,
+            notes TEXT,
+            source_url TEXT,
+            metadata TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
+        CREATE INDEX IF NOT EXISTS idx_contacts_linkedin ON contacts(linkedin_url);
+        CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company);
+        CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
     """)
     conn.commit()
     conn.close()
@@ -144,6 +165,29 @@ class WebSearchRequest(BaseModel):
     query: str
     limit: Optional[int] = 5
     save_results: Optional[bool] = False
+
+
+class ContactCreate(BaseModel):
+    name: Optional[str] = ""
+    email: Optional[str] = ""
+    phone: Optional[str] = ""
+    linkedin_url: Optional[str] = ""
+    company: Optional[str] = ""
+    title: Optional[str] = ""
+    notes: Optional[str] = ""
+    source_url: Optional[str] = ""
+    metadata: Optional[dict] = {}
+
+
+class ContactUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 # --- Endpoints ---
@@ -518,6 +562,263 @@ async def web_search(req: WebSearchRequest):
     return {"success": False, "error": "Search failed"}
 
 
+# --- Contacts Endpoints ---
+
+def merge_contact_data(existing: dict, new: dict) -> dict:
+    """Merge new data into existing contact, preferring non-empty values"""
+    merged = existing.copy()
+    for key in ['name', 'email', 'phone', 'linkedin_url', 'company', 'title', 'notes', 'source_url']:
+        if not merged.get(key) and new.get(key):
+            merged[key] = new[key]
+    # Merge metadata
+    existing_meta = merged.get('metadata', {}) or {}
+    new_meta = new.get('metadata', {}) or {}
+    merged['metadata'] = {**existing_meta, **new_meta}
+    return merged
+
+
+@app.get("/contacts")
+async def list_contacts(
+    limit: int = Query(50),
+    search: Optional[str] = None,
+    company: Optional[str] = None
+):
+    """List contacts with optional search"""
+    with get_db() as db:
+        query = "SELECT * FROM contacts WHERE 1=1"
+        params = []
+
+        if search:
+            query += " AND (name LIKE ? OR email LIKE ? OR company LIKE ?)"
+            search_term = f"%{search}%"
+            params.extend([search_term, search_term, search_term])
+
+        if company:
+            query += " AND company LIKE ?"
+            params.append(f"%{company}%")
+
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = db.execute(query, params).fetchall()
+
+    return {"results": [row_to_dict(r) for r in rows], "count": len(rows)}
+
+
+@app.post("/contacts")
+async def create_contact(contact: ContactCreate):
+    """Create or merge contact"""
+    now = int(time.time() * 1000)
+
+    with get_db() as db:
+        # Check for existing contact by email
+        existing = None
+        if contact.email:
+            existing = db.execute(
+                "SELECT * FROM contacts WHERE email = ?", (contact.email,)
+            ).fetchone()
+
+        # Check by LinkedIn URL if not found by email
+        if not existing and contact.linkedin_url:
+            existing = db.execute(
+                "SELECT * FROM contacts WHERE linkedin_url = ?", (contact.linkedin_url,)
+            ).fetchone()
+
+        if existing:
+            # Merge: update fields that are empty in existing
+            existing_dict = row_to_dict(existing)
+            merged = merge_contact_data(existing_dict, contact.dict())
+
+            db.execute(
+                """
+                UPDATE contacts SET
+                    name = ?, email = ?, phone = ?, linkedin_url = ?,
+                    company = ?, title = ?, notes = ?, source_url = ?,
+                    metadata = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    merged.get('name', ''),
+                    merged.get('email', ''),
+                    merged.get('phone', ''),
+                    merged.get('linkedin_url', ''),
+                    merged.get('company', ''),
+                    merged.get('title', ''),
+                    merged.get('notes', ''),
+                    merged.get('source_url', ''),
+                    json.dumps(merged.get('metadata', {})),
+                    now,
+                    existing['id']
+                ),
+            )
+            db.commit()
+            return {"success": True, "id": existing['id'], "action": "merged"}
+
+        # Create new contact
+        cursor = db.execute(
+            """
+            INSERT INTO contacts (name, email, phone, linkedin_url, company, title,
+                                  notes, source_url, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                contact.name, contact.email, contact.phone, contact.linkedin_url,
+                contact.company, contact.title, contact.notes, contact.source_url,
+                json.dumps(contact.metadata), now, now
+            ),
+        )
+        db.commit()
+        return {"success": True, "id": cursor.lastrowid, "action": "created"}
+
+
+@app.get("/contacts/{contact_id}")
+async def get_contact(contact_id: int):
+    """Get a single contact"""
+    with get_db() as db:
+        row = db.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    return row_to_dict(row)
+
+
+@app.put("/contacts/{contact_id}")
+async def update_contact(contact_id: int, contact: ContactUpdate):
+    """Update a contact"""
+    now = int(time.time() * 1000)
+
+    with get_db() as db:
+        # Build update query dynamically
+        updates = []
+        values = []
+
+        for field in ['name', 'email', 'phone', 'linkedin_url', 'company', 'title', 'notes', 'source_url']:
+            value = getattr(contact, field, None)
+            if value is not None:
+                updates.append(f"{field} = ?")
+                values.append(value)
+
+        if contact.metadata is not None:
+            updates.append("metadata = ?")
+            values.append(json.dumps(contact.metadata))
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        updates.append("updated_at = ?")
+        values.extend([now, contact_id])
+
+        result = db.execute(
+            f"UPDATE contacts SET {', '.join(updates)} WHERE id = ?",
+            values
+        )
+        db.commit()
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+    return {"success": True}
+
+
+@app.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: int):
+    """Delete a contact"""
+    with get_db() as db:
+        result = db.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+        db.commit()
+
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+    return {"success": True}
+
+
+@app.get("/contacts/{contact_id}/summary")
+async def get_contact_summary(contact_id: int):
+    """Generate AI summary of a contact"""
+    if not gemini_model:
+        raise HTTPException(status_code=503, detail="Gemini not configured")
+
+    with get_db() as db:
+        # Get contact
+        contact_row = db.execute(
+            "SELECT * FROM contacts WHERE id = ?", (contact_id,)
+        ).fetchone()
+
+        if not contact_row:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        contact = row_to_dict(contact_row)
+
+        # Find related captures (mentions of the contact)
+        related_captures = []
+        if contact.get("email"):
+            related = db.execute(
+                """
+                SELECT * FROM captures
+                WHERE content LIKE ?
+                ORDER BY timestamp DESC LIMIT 5
+                """,
+                (f"%{contact['email']}%",),
+            ).fetchall()
+            related_captures.extend([row_to_dict(r) for r in related])
+
+        if contact.get("name"):
+            name = contact.get("name", "")
+            if len(name) > 2:  # Only search if name is meaningful
+                related = db.execute(
+                    """
+                    SELECT * FROM captures
+                    WHERE content LIKE ?
+                    ORDER BY timestamp DESC LIMIT 5
+                    """,
+                    (f"%{name}%",),
+                ).fetchall()
+                related_captures.extend([row_to_dict(r) for r in related])
+
+    # Build context for Gemini
+    context_parts = ["Contact Information:"]
+    for key in ['name', 'email', 'phone', 'linkedin_url', 'company', 'title', 'notes', 'source_url']:
+        if contact.get(key):
+            context_parts.append(f"  {key}: {contact[key]}")
+
+    if related_captures:
+        context_parts.append(f"\nRelated Context ({len(related_captures)} mentions):")
+        for i, cap in enumerate(related_captures[:3], 1):
+            context_parts.append(f"\n[{i}] {cap.get('title', 'Untitled')}")
+            context_parts.append(f"    URL: {cap.get('url', 'N/A')}")
+            content = (cap.get('content') or '')[:300]
+            context_parts.append(f"    Content: {content}...")
+
+    context = "\n".join(context_parts)
+
+    prompt = f"""You are analyzing a contact from a user's CRM.
+
+Based on the available information, provide a brief summary (2-3 sentences) of who this person is and their relationship to the user.
+
+{context}
+
+Provide a concise summary:"""
+
+    try:
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.5}
+        )
+        summary = response.text.strip()
+    except Exception as e:
+        summary = f"Summary generation failed: {str(e)}"
+
+    return {
+        "contact_id": contact_id,
+        "summary": summary,
+        "related_captures_count": len(related_captures),
+        "provider": "gemini",
+        "model": GEMINI_MODEL,
+    }
+
+
 # --- Startup ---
 
 @app.on_event("startup")
@@ -536,8 +837,15 @@ async def startup():
     print("  POST /web-search      - Firecrawl web search")
     print("  POST /ask             - Ask Gemini about captures")
     print("  POST /query           - Query database (SELECT only)")
-    print("  GET  /captures        - List captures")
+    print("  GET  /captures         - List captures")
     print("  GET  /search          - Full-text search")
+    print("\n📇 Contacts:")
+    print("  GET  /contacts        - List contacts")
+    print("  POST /contacts        - Create/merge contact")
+    print("  GET  /contacts/{id}   - Get contact")
+    print("  PUT  /contacts/{id}   - Update contact")
+    print("  DELETE /contacts/{id} - Delete contact")
+    print("  GET  /contacts/{id}/summary - AI summary of contact")
     print("\n💡 The AI figures out content type - no custom endpoints needed!\n")
 
 

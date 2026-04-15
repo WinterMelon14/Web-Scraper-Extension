@@ -127,6 +127,10 @@ async function captureTab(tab) {
   try {
     console.log('Capturing tab:', tab.url);
 
+    // Detect site type and extract contacts if applicable
+    const siteType = detectSiteType(tab.url);
+
+    // Extract page content
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractPageData,
@@ -148,9 +152,170 @@ async function captureTab(tab) {
     await sendToAPI(capture);
     await addCaptureToStorage(capture);
 
+    // Extract contacts for Gmail and LinkedIn
+    if (siteType === 'gmail') {
+      await extractGmailContacts(tab);
+    } else if (siteType === 'linkedin_profile') {
+      await extractLinkedInProfile(tab);
+    }
+
     console.log('Captured successfully:', tab.url);
   } catch (err) {
     console.error('Capture failed:', err);
+  }
+}
+
+// Site type detection
+function detectSiteType(url) {
+  if (url.includes('mail.google.com')) return 'gmail';
+  if (url.includes('linkedin.com/in/')) return 'linkedin_profile';
+  if (url.includes('linkedin.com')) return 'linkedin';
+  return 'generic';
+}
+
+// Gmail contact extraction
+async function extractGmailContacts(tab) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const contacts = [];
+
+        // Extract sender info from email
+        const senderEmail = document.querySelector('[email]');
+        if (senderEmail) {
+          contacts.push({
+            name: senderEmail.getAttribute('name') || senderEmail.innerText.trim().split('<')[0].trim(),
+            email: senderEmail.getAttribute('email'),
+            source_type: 'gmail_sender',
+            source_url: window.location.href,
+          });
+        }
+
+        // Extract recipients from email thread
+        const emailElements = document.querySelectorAll('[email]');
+        emailElements.forEach(el => {
+          const email = el.getAttribute('email');
+          const name = el.getAttribute('name') || el.innerText.trim().split('<')[0].trim();
+          if (email && !contacts.find(c => c.email === email)) {
+            contacts.push({
+              name: name,
+              email: email,
+              source_type: 'gmail',
+              source_url: window.location.href,
+            });
+          }
+        });
+
+        // Extract from "To" field in compose view
+        const toFields = document.querySelectorAll('[aria-label*="To"], [aria-label*="Cc"], [aria-label*="Bcc"]');
+        toFields.forEach(field => {
+          const emails = (field.innerText || field.value || '').match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
+          emails.forEach(email => {
+            if (!contacts.find(c => c.email === email)) {
+              contacts.push({
+                email: email,
+                source_type: 'gmail',
+                source_url: window.location.href,
+              });
+            }
+          });
+        });
+
+        return contacts;
+      },
+    });
+
+    const contacts = results[0]?.result || [];
+    console.log(`Extracted ${contacts.length} Gmail contacts`);
+
+    for (const contact of contacts) {
+      await saveContact(contact);
+    }
+  } catch (err) {
+    console.error('Gmail contact extraction failed:', err);
+  }
+}
+
+// LinkedIn profile extraction
+async function extractLinkedInProfile(tab) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const profile = {};
+
+        // Name - try multiple selectors
+        const nameEl = document.querySelector('h1.text-heading-xlarge') ||
+                      document.querySelector('h1') ||
+                      document.querySelector('[data-testid="text-component"]');
+        if (nameEl) profile.name = nameEl.innerText.trim();
+
+        // Title/Headline
+        const titleEl = document.querySelector('.text-body-medium.break-words') ||
+                        document.querySelector('[data-testid="text-component"]');
+        if (titleEl) profile.title = titleEl.innerText.trim();
+
+        // Company - from experience or headline
+        const companyEl = document.querySelector('[aria-label*="Current company"]') ||
+                          document.querySelector('.inline-show-more-text--is-collapsed') ||
+                          document.querySelector('[data-field="experience_company"]');
+        if (companyEl) profile.company = companyEl.innerText.trim();
+
+        // Profile URL
+        profile.linkedin_url = window.location.href.split('?')[0];
+        profile.source_type = 'linkedin_profile';
+        profile.source_url = window.location.href;
+
+        // About/Notes section
+        const aboutSection = document.querySelector('#about')?.closest('section')?.querySelector('.inline-show-more-text');
+        if (aboutSection) profile.notes = aboutSection.innerText.trim().slice(0, 500);
+
+        // Try to get connection info
+        const connectionEl = document.querySelector('.pv-text-details__right-panel');
+        if (connectionEl) {
+          const connectionText = connectionEl.innerText;
+          if (connectionText.includes('st') || connectionText.includes('nd')) {
+            profile.notes = (profile.notes || '') + ' Connection: ' + connectionText;
+          }
+        }
+
+        return profile;
+      },
+    });
+
+    const profile = results[0]?.result;
+    if (profile && profile.name) {
+      console.log('Extracted LinkedIn profile:', profile.name);
+      await saveContact(profile);
+    }
+  } catch (err) {
+    console.error('LinkedIn profile extraction failed:', err);
+  }
+}
+
+// Save contact to API
+async function saveContact(contact) {
+  if (!contact.email && !contact.linkedin_url && !contact.name) {
+    return; // Need at least one identifier
+  }
+
+  try {
+    const res = await fetch(`${API_URL}/contacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(contact),
+    });
+
+    if (!res.ok) {
+      console.error('Failed to save contact:', res.status);
+      return;
+    }
+
+    const data = await res.json();
+    console.log('Contact saved:', data.action, contact.email || contact.linkedin_url || contact.name);
+  } catch (err) {
+    console.error('Failed to save contact:', err);
   }
 }
 

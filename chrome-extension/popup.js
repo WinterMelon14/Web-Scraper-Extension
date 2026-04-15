@@ -340,4 +340,112 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
+// Tab switching
+document.getElementById('contextTab').addEventListener('click', () => {
+  setActiveTab('context');
+});
+document.getElementById('contactsTab').addEventListener('click', () => {
+  setActiveTab('contacts');
+  loadContacts();
+});
+
+function setActiveTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+  document.getElementById(`${tab}Tab`).classList.add('active');
+  document.getElementById(`${tab}Content`).classList.add('active');
+}
+
+// Contacts functions
+async function loadContacts(search = '') {
+  const container = document.getElementById('contactList');
+
+  try {
+    let url = `${API_URL}/contacts?limit=50`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    updateContactStats(data.results);
+
+    if (data.results.length === 0) {
+      container.innerHTML = '<div class="empty-state">No contacts yet.<br>Browse Gmail or LinkedIn while recording to capture contacts.</div>';
+      return;
+    }
+
+    container.innerHTML = data.results.map(contact => renderContact(contact)).join('');
+
+    // Add event listeners for summary buttons
+    container.querySelectorAll('.summary-btn').forEach(btn => {
+      btn.addEventListener('click', () => loadContactSummary(btn.dataset.id));
+    });
+
+  } catch (err) {
+    console.error('Failed to load contacts:', err);
+    container.innerHTML = '<div class="empty-state">Failed to load contacts. Make sure the server is running.</div>';
+  }
+}
+
+function renderContact(contact) {
+  const initials = contact.name ? contact.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : '?';
+  const timeAgo = formatTimeAgo(contact.updated_at || contact.created_at);
+
+  return `
+    <div class="contact-card" data-id="${contact.id}">
+      <div class="contact-header">
+        <div>
+          <h3 class="contact-name">${escapeHtml(contact.name || 'Unknown')}</h3>
+          ${contact.title ? `<div class="contact-title">${escapeHtml(contact.title)}</div>` : ''}
+          ${contact.company ? `<div class="contact-company">${escapeHtml(contact.company)}</div>` : ''}
+        </div>
+        <div class="contact-actions">
+          <button class="summary-btn" data-id="${contact.id}" title="Get AI summary">Summary</button>
+        </div>
+      </div>
+      <div class="contact-meta">
+        ${contact.email ? `<span><a href="mailto:${escapeHtml(contact.email)}">${escapeHtml(contact.email)}</a></span>` : ''}
+        ${contact.linkedin_url ? `<span><a href="${escapeHtml(contact.linkedin_url)}" target="_blank">LinkedIn</a></span>` : ''}
+        ${contact.phone ? `<span>${escapeHtml(contact.phone)}</span>` : ''}
+        <span>Updated ${timeAgo}</span>
+      </div>
+      <div class="summary-container" id="summary-${contact.id}"></div>
+    </div>
+  `;
+}
+
+async function loadContactSummary(contactId) {
+  const container = document.getElementById(`summary-${contactId}`);
+  container.innerHTML = '<div class="summary-loading">Generating summary...</div>';
+
+  try {
+    const res = await fetch(`${API_URL}/contacts/${contactId}/summary`);
+    const data = await res.json();
+
+    container.innerHTML = `<div class="contact-summary">${parseMarkdown(data.summary)}</div>`;
+  } catch (err) {
+    container.innerHTML = '<div class="summary-loading">Failed to generate summary</div>';
+  }
+}
+
+function updateContactStats(contacts) {
+  document.getElementById('totalContacts').textContent = contacts.length;
+
+  const companies = new Set(contacts.filter(c => c.company).map(c => c.company));
+  document.getElementById('companyCount').textContent = companies.size;
+
+  const linkedIn = contacts.filter(c => c.linkedin_url).length;
+  document.getElementById('linkedInCount').textContent = linkedIn;
+}
+
+// Search input handler for contacts
+let searchTimeout;
+document.getElementById('contactSearch').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    loadContacts(e.target.value);
+  }, 300);
+});
+
 init();
