@@ -24,8 +24,6 @@ load_dotenv()
 PORT = int(os.getenv("PORT", 3000))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
-
 # Database path
 DB_PATH = os.path.join(os.path.dirname(__file__), "captures.db")
 
@@ -36,13 +34,6 @@ if GEMINI_API_KEY:
     gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 else:
     gemini_model = None
-
-# Firecrawl client
-try:
-    from firecrawl import FirecrawlApp
-    firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY else None
-except ImportError:
-    firecrawl_client = None
 
 # FastAPI app
 app = FastAPI(title="Context Capture API", version="1.0.0")
@@ -155,18 +146,6 @@ class AskRequest(BaseModel):
     limit: Optional[int] = 50
 
 
-class ScrapeRequest(BaseModel):
-    url: str
-    options: Optional[dict] = {}
-    session_id: Optional[str] = None
-
-
-class WebSearchRequest(BaseModel):
-    query: str
-    limit: Optional[int] = 5
-    save_results: Optional[bool] = False
-
-
 class ContactCreate(BaseModel):
     name: Optional[str] = ""
     email: Optional[str] = ""
@@ -200,7 +179,6 @@ async def health():
         "timestamp": int(time.time() * 1000),
         "services": {
             "gemini": gemini_model is not None,
-            "firecrawl": firecrawl_client is not None,
         },
         "config": {
             "llm_provider": "gemini",
@@ -461,105 +439,6 @@ async def ask(req: AskRequest):
         "provider": "gemini",
         "model": GEMINI_MODEL,
     }
-
-
-@app.post("/scrape")
-async def scrape(req: ScrapeRequest):
-    """Scrape URL using Firecrawl"""
-    if not firecrawl_client:
-        return {"success": False, "error": "Firecrawl not configured"}
-
-    try:
-        result = firecrawl_client.scrape_url(
-            req.url,
-            formats=["markdown", "html"],
-        )
-
-        if result:
-            # Save to database
-            url = result.get("metadata", {}).get("sourceURL", req.url)
-            title = result.get("metadata", {}).get("title", "")
-            content = result.get("markdown", result.get("text", ""))
-
-            with get_db() as db:
-                cursor = db.execute(
-                    """
-                    INSERT INTO captures (url, title, content, metadata, source_type, timestamp, session_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        url,
-                        title,
-                        content,
-                        json.dumps(result.get("metadata", {})),
-                        "firecrawl",
-                        int(time.time() * 1000),
-                        req.session_id,
-                    ),
-                )
-                last_id = cursor.lastrowid
-                db.commit()
-
-                # Update FTS
-                db.execute(
-                    "INSERT INTO captures_fts (rowid, title, content) VALUES (?, ?, ?)",
-                    (last_id, title, content),
-                )
-                db.commit()
-
-            return {
-                "success": True,
-                "source": "firecrawl",
-                "url": url,
-                "title": title,
-                "content": content,
-                "savedId": last_id,
-            }
-    except Exception as e:
-        print(f"Firecrawl error: {e}")
-
-    return {"success": False, "error": "Scraping failed"}
-
-
-@app.post("/web-search")
-async def web_search(req: WebSearchRequest):
-    """Search web using Firecrawl"""
-    if not firecrawl_client:
-        return {"success": False, "error": "Firecrawl not configured"}
-
-    try:
-        result = firecrawl_client.search(req.query, limit=req.limit)
-
-        if result and result.get("data"):
-            results = result["data"]
-
-            if req.save_results:
-                with get_db() as db:
-                    for item in results:
-                        try:
-                            db.execute(
-                                """
-                                INSERT INTO captures (url, title, content, metadata, source_type, timestamp)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                                """,
-                                (
-                                    item.get("url", item.get("metadata", {}).get("sourceURL", "")),
-                                    item.get("title", item.get("metadata", {}).get("title", "")),
-                                    item.get("markdown", item.get("content", "")),
-                                    json.dumps(item.get("metadata", {})),
-                                    "web_search",
-                                    int(time.time() * 1000),
-                                ),
-                            )
-                            db.commit()
-                        except Exception as e:
-                            print(f"Failed to save result: {e}")
-
-            return {"success": True, "source": "firecrawl", "results": results}
-    except Exception as e:
-        print(f"Search error: {e}")
-
-    return {"success": False, "error": "Search failed"}
 
 
 # --- Contacts Endpoints ---
@@ -828,13 +707,10 @@ async def startup():
     print(f"Database: {DB_PATH}")
     print("\n📡 Services:")
     print(f"  {'✅' if gemini_model else '⚠️'} Gemini: {f'Enabled ({GEMINI_MODEL})' if gemini_model else 'Not configured'}")
-    print(f"  {'✅' if firecrawl_client else '⚠️'} Firecrawl: {'Enabled' if firecrawl_client else 'Not configured'}")
     print("\n🔌 Endpoints:")
     print("  GET  /health          - Health check")
     print("  GET  /stats           - Database stats")
     print("  POST /capture         - Save any content")
-    print("  POST /scrape          - Firecrawl scrape URL")
-    print("  POST /web-search      - Firecrawl web search")
     print("  POST /ask             - Ask Gemini about captures")
     print("  POST /query           - Query database (SELECT only)")
     print("  GET  /captures         - List captures")

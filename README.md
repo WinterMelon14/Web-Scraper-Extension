@@ -1,11 +1,12 @@
 # Context Capture
 
-A Chrome extension that captures content from any website and lets you ask AI questions about your browsing history.
+A Chrome extension that captures content from any website, extracts contacts from Gmail and LinkedIn, and lets you ask AI questions about your browsing history.
 
 ## Features
 
 - **Universal capture**: Works on Gmail, ChatGPT, GitHub, Notion, or any webpage
 - **Smart recording**: Start/stop recording to capture pages as you browse
+- **Contact extraction**: Automatically extracts contacts from Gmail emails and LinkedIn profiles
 - **AI-powered search**: Ask questions about your captured content using Gemini
 - **Full-text search**: Search across all captured content
 - **Local database**: All data stored locally in SQLite
@@ -51,9 +52,11 @@ python server.py
 ## Usage
 
 1. Click the extension icon → **Start Recording**
-2. Browse websites normally
-3. Click **Stop Recording** when done
-4. Type a question in the "Ask Claude" box to query your captures
+2. Browse websites normally — pages are captured automatically
+3. Visit Gmail or LinkedIn profiles to capture contacts
+4. Click **Stop Recording** when done
+5. Type a question in the **Ask Gemini** box to query your captures
+6. Switch to the **Contacts** tab to browse extracted contacts
 
 ### Example Questions
 
@@ -64,6 +67,8 @@ python server.py
 
 ## API Endpoints
 
+### Captures
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
@@ -73,6 +78,17 @@ python server.py
 | `/search` | GET | Full-text search |
 | `/ask` | POST | Ask Gemini about captures |
 | `/query` | POST | Run SQL SELECT query |
+
+### Contacts
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/contacts` | GET | List contacts (supports `search` and `company` filters) |
+| `/contacts` | POST | Create or merge a contact |
+| `/contacts/{id}` | GET | Get a single contact |
+| `/contacts/{id}` | PUT | Update a contact |
+| `/contacts/{id}` | DELETE | Delete a contact |
+| `/contacts/{id}/summary` | GET | AI-generated summary of a contact |
 
 ## Project Structure
 
@@ -85,12 +101,13 @@ GeodoDemo/
 ├── chrome-extension/     # Browser extension
 │   ├── manifest.json
 │   ├── background.js
+│   ├── content.js
 │   ├── popup.html
 │   └── popup.js
 ├── mcp-server/           # MCP server for Claude Desktop
 │   └── mcp_server.py
-├── start-server.bat     # Windows startup script
-└── start-server.sh      # Unix startup script
+├── start-server.bat      # Windows startup script
+└── start-server.sh       # Unix startup script
 ```
 
 ## Configuration
@@ -100,7 +117,6 @@ Edit `api-server/.env`:
 ```env
 GEMINI_API_KEY=your-key
 GEMINI_MODEL=gemini-2.5-flash
-FIRECRAWL_API_KEY=         # Optional
 PORT=3000
 ```
 
