@@ -120,22 +120,6 @@ GEMINI_MODEL=gemini-2.5-flash
 PORT=3000
 ```
 
-## MCP Server (Claude Desktop)
-
-To use with Claude Desktop, add to your config:
-
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-```json
-{
-  "mcpServers": {
-    "context-capture": {
-      "command": "python",
-      "args": ["C:\\path\\to\\GeodoDemo\\mcp-server\\mcp_server.py"]
-    }
-  }
-}
-```
-
 ## License
 
 MIT
